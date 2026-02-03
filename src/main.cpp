@@ -9,11 +9,12 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_SSD1306.h>
 #include <RTClib.h>
+#include <ESP32Servo.h>
 
 // Pin definitions
 #define START_BTN_PIN 32
-#define FILL_SOLENOID_PIN 25
-#define EMPTY_SOLENOID_PIN 26
+#define SERVO_FILL_PIN 25
+#define SERVO_EMPTY_PIN 26
 #define MEASURING_RELAY_PIN 27 // Single relay for both measuring lights (NO=Green, NC=Red)
 #define SDA_PIN 21             // I2C Bus 1 for MPU6050 and OLED1
 #define SCL_PIN 22             // I2C Bus 1 for MPU6050 and OLED1
@@ -53,6 +54,8 @@ TwoWire I2C_2 = TwoWire(1); // I2C Bus 2 for DS3231 and OLED2
 Adafruit_SSD1306 display1(SCREEN_WIDTH, SCREEN_HEIGHT, &I2C_1, OLED_RESET);
 Adafruit_SSD1306 display2(SCREEN_WIDTH, SCREEN_HEIGHT, &I2C_2, OLED_RESET);
 RTC_DS3231 rtc;
+Servo fillServo;
+Servo emptyServo;
 WebServer server(80);
 
 // Add these global variables for non-blocking measurement
@@ -90,6 +93,12 @@ struct Config
   float targetAngleMax = 45.0;
   float lastMeasurementAngle = 0.0;
   bool autoMeasurementEnabled = false; // NEW: Default to disabled
+
+  // servo angle configurations
+  int fillOpenAngle = 90;
+  int fillCloseAngle = 0;
+  int emptyOpenAngle = 90;
+  int emptyCloseAngle = 0;
 } config;
 
 // Global variables
@@ -279,39 +288,83 @@ String formatTime(DateTime dt)
   return String(buffer);
 }
 
+// void handleStartButton()
+// {
+//   static bool lastStableState = HIGH;
+//   static unsigned long lastDebounceTime = 0;
+//   const unsigned long debounceDelay = 50;
+
+//   bool reading = digitalRead(START_BTN_PIN);
+
+//   if (reading != lastStableState)
+//   {
+//     lastDebounceTime = millis();
+//   }
+
+//   if ((millis() - lastDebounceTime) > debounceDelay)
+//   {
+//     // Tombol ditekan (HIGH → LOW)
+//     if (lastStableState == HIGH && reading == LOW)
+//     {
+//       if (!isMeasuring)
+//       {
+//         performMeasurement();
+//         // isManualMode = true;
+
+//         logSerial("Measurement STARTED via PUSH BUTTON");
+//       }
+//       else
+//       {
+//         logSerial("Start button pressed, but measurement already running");
+//       }
+//     }
+
+//     lastStableState = reading;
+//   }
+// }
+
 void handleStartButton()
 {
-  static bool lastStableState = HIGH;
+  static bool lastReading = HIGH;
+  static bool buttonState = HIGH;
   static unsigned long lastDebounceTime = 0;
   const unsigned long debounceDelay = 50;
 
   bool reading = digitalRead(START_BTN_PIN);
 
-  if (reading != lastStableState)
+  // Jika bacaan berubah, reset timer debounce
+  if (reading != lastReading)
   {
     lastDebounceTime = millis();
   }
 
+  // Jika sudah stabil lebih dari debounceDelay
   if ((millis() - lastDebounceTime) > debounceDelay)
   {
-    // Tombol ditekan (HIGH → LOW)
-    if (lastStableState == HIGH && reading == LOW)
+    // Jika state stabil berubah
+    if (reading != buttonState)
     {
-      if (!isMeasuring)
-      {
-        performMeasurement();
-        isManualMode = true;
+      buttonState = reading;
 
-        logSerial("Measurement STARTED via PUSH BUTTON");
-      }
-      else
+      // Deteksi tombol ditekan (PULLUP → LOW)
+      if (buttonState == LOW)
       {
-        logSerial("Start button pressed, but measurement already running");
+        logSerial("START button pressed");
+
+        if (!isMeasuring)
+        {
+          performMeasurement();
+          logSerial("Measurement STARTED via PUSH BUTTON");
+        }
+        else
+        {
+          logSerial("Start button pressed, but measurement already running");
+        }
       }
     }
-
-    lastStableState = reading;
   }
+
+  lastReading = reading;
 }
 
 
@@ -321,15 +374,9 @@ void setup()
 
   pinMode(START_BTN_PIN, INPUT_PULLUP);
 
-  // Initialize pins
-  pinMode(FILL_SOLENOID_PIN, OUTPUT);
-  pinMode(EMPTY_SOLENOID_PIN, OUTPUT);
+  fillServo.attach(SERVO_FILL_PIN);
+  emptyServo.attach(SERVO_EMPTY_PIN);
   pinMode(MEASURING_RELAY_PIN, OUTPUT);
-
-  // Ensure solenoids are closed and measuring light shows red (relay OFF = NC = Red light)
-  digitalWrite(FILL_SOLENOID_PIN, HIGH);
-  digitalWrite(EMPTY_SOLENOID_PIN, HIGH);
-  digitalWrite(MEASURING_RELAY_PIN, HIGH); // LOW = Red light (NC), HIGH = Green light (NO)
 
   // Initialize I2C buses with custom pins
   I2C_1.begin(SDA_PIN, SCL_PIN);   // Primary I2C bus
@@ -339,6 +386,13 @@ void setup()
 
   // Initialize system first (this will initialize RTC)
   initializeSystem();
+
+  // Set servos to closed position (safe state) Pastikan kondisi awal aman
+  fillServo.write(config.fillCloseAngle);
+  emptyServo.write(config.emptyCloseAngle);
+  digitalWrite(MEASURING_RELAY_PIN, HIGH); // LOW = Red light (NC), HIGH = Green light (NO)
+
+  logSerial("Servos initialized - Fill: " + String(config.fillCloseAngle) + "°, Empty: " + String(config.emptyCloseAngle) + "°");
 
   // Now scan I2C devices after RTC is initialized
   scanI2CDevices();
@@ -498,6 +552,138 @@ void initializeSystem()
   logSerial("System initialization complete");
 }
 
+void loadConfig()
+{
+  if (LittleFS.exists("/settings.json"))
+  {
+    File file = LittleFS.open("/settings.json", "r");
+    if (file)
+    {
+      DynamicJsonDocument doc(1024);
+      DeserializationError error = deserializeJson(doc, file);
+
+      if (error)
+      {
+        logSerial("Failed to parse settings.json, creating new one");
+        file.close();
+        createDefaultConfig();
+        return;
+      }
+
+      config.desiredDensity = doc["desiredDensity"] | 1.025;
+      config.measurementInterval = doc["measurementInterval"] | 30;
+      config.fillDuration = doc["fillDuration"] | 5;
+      config.waitDuration = doc["waitDuration"] | 60;
+      config.measurementDuration = doc["measurementDuration"] | 10;
+      config.emptyDuration = doc["emptyDuration"] | 120;
+      config.calibrationOffset = doc["calibrationOffset"] | 0.0;
+      config.calibrationScale = doc["calibrationScale"] | 1.0;
+      config.lastMeasurementValue = doc["lastMeasurementValue"] | 0.0;
+      config.lastMeasurementTime = doc["lastMeasurementTime"] | 0;
+      config.targetAngleMin = doc["targetAngleMin"] | 40.0;
+      config.targetAngleMax = doc["targetAngleMax"] | 45.0;
+      config.lastMeasurementAngle = doc["lastMeasurementAngle"] | 0.0;
+      config.autoMeasurementEnabled = doc["autoMeasurementEnabled"] | false; // NEW
+
+      // load servo angles
+      config.fillOpenAngle = doc["fillOpenAngle"] | 90;
+      config.fillCloseAngle = doc["fillCloseAngle"] | 0;
+      config.emptyOpenAngle = doc["emptyOpenAngle"] | 90;
+      config.emptyCloseAngle = doc["emptyCloseAngle"] | 0;
+
+      file.close();
+      logSerial("Configuration loaded from settings.json");
+
+      if (config.lastMeasurementTime > 0)
+      {
+        lastMeasurement = config.lastMeasurementValue;
+        currentAngle = config.lastMeasurementAngle;
+        lastMeasurementTime = DateTime(config.lastMeasurementTime);
+        logSerial("Last measurement restored: " + String(lastMeasurement, 3) +
+                  " (angle: " + String(config.lastMeasurementAngle, 1) + "°) at " +
+                  String(lastMeasurementTime.timestamp()));
+      }
+
+      // Log auto-measurement status
+      logSerial("Automatic measurements: " + String(config.autoMeasurementEnabled ? "ENABLED" : "DISABLED"));
+    }
+    else
+    {
+      logSerial("Failed to open settings.json, creating new one");
+      createDefaultConfig();
+    }
+  }
+  else
+  {
+    logSerial("settings.json not found, creating default configuration");
+    createDefaultConfig();
+  }
+}
+
+void createDefaultConfig()
+{
+  config.desiredDensity = 1.025;
+  config.measurementInterval = 30;
+  config.fillDuration = 5;
+  config.waitDuration = 5;
+  config.measurementDuration = 10;
+  config.emptyDuration = 5;
+  config.calibrationOffset = 0.0;
+  config.calibrationScale = 1.0;
+  config.lastMeasurementValue = 0.0;
+  config.lastMeasurementTime = 0;
+  config.targetAngleMin = 40.0;
+  config.targetAngleMax = 45.0;
+  config.lastMeasurementAngle = 0.0;
+  config.autoMeasurementEnabled = false; // NEW: Default to disabled
+
+  // default servo angles
+  config.fillOpenAngle = 90;
+  config.fillCloseAngle = 0;
+  config.emptyOpenAngle = 90;
+  config.emptyCloseAngle = 0;
+
+  saveConfig();
+  logSerial("Default configuration created and saved");
+}
+
+void saveConfig()
+{
+  DynamicJsonDocument doc(1024);
+  doc["desiredDensity"] = config.desiredDensity;
+  doc["measurementInterval"] = config.measurementInterval;
+  doc["fillDuration"] = config.fillDuration;
+  doc["waitDuration"] = config.waitDuration;
+  doc["measurementDuration"] = config.measurementDuration;
+  doc["emptyDuration"] = config.emptyDuration;
+  doc["calibrationOffset"] = config.calibrationOffset;
+  doc["calibrationScale"] = config.calibrationScale;
+  doc["lastMeasurementValue"] = config.lastMeasurementValue;
+  doc["lastMeasurementTime"] = config.lastMeasurementTime;
+  doc["targetAngleMin"] = config.targetAngleMin;
+  doc["targetAngleMax"] = config.targetAngleMax;
+  doc["lastMeasurementAngle"] = config.lastMeasurementAngle;
+  doc["autoMeasurementEnabled"] = config.autoMeasurementEnabled; // NEW
+
+  // save servo angles
+  doc["fillOpenAngle"] = config.fillOpenAngle;
+  doc["fillCloseAngle"] = config.fillCloseAngle;
+  doc["emptyOpenAngle"] = config.emptyOpenAngle;
+  doc["emptyCloseAngle"] = config.emptyCloseAngle;
+
+  File file = LittleFS.open("/settings.json", "w");
+  if (file)
+  {
+    serializeJson(doc, file);
+    file.close();
+    logSerial("Configuration saved to settings.json");
+  }
+  else
+  {
+    logSerial("Failed to save configuration to settings.json");
+  }
+}
+
 // FIXED: calculateNextMeasurementTime function
 void calculateNextMeasurementTime()
 {
@@ -550,120 +736,6 @@ void calculateNextMeasurementTime()
     nextMeasurementTime = DateTime((uint32_t)0);
     logSerial("No previous measurement found, no automatic measurement scheduled");
     logSerial("First measurement of the day must be started manually");
-  }
-}
-
-void loadConfig()
-{
-  if (LittleFS.exists("/settings.json"))
-  {
-    File file = LittleFS.open("/settings.json", "r");
-    if (file)
-    {
-      DynamicJsonDocument doc(1024);
-      DeserializationError error = deserializeJson(doc, file);
-
-      if (error)
-      {
-        logSerial("Failed to parse settings.json, creating new one");
-        file.close();
-        createDefaultConfig();
-        return;
-      }
-
-      config.desiredDensity = doc["desiredDensity"] | 1.025;
-      config.measurementInterval = doc["measurementInterval"] | 30;
-      config.fillDuration = doc["fillDuration"] | 5;
-      config.waitDuration = doc["waitDuration"] | 60;
-      config.measurementDuration = doc["measurementDuration"] | 10;
-      config.emptyDuration = doc["emptyDuration"] | 120;
-      config.calibrationOffset = doc["calibrationOffset"] | 0.0;
-      config.calibrationScale = doc["calibrationScale"] | 1.0;
-      config.lastMeasurementValue = doc["lastMeasurementValue"] | 0.0;
-      config.lastMeasurementTime = doc["lastMeasurementTime"] | 0;
-      config.targetAngleMin = doc["targetAngleMin"] | 40.0;
-      config.targetAngleMax = doc["targetAngleMax"] | 45.0;
-      config.lastMeasurementAngle = doc["lastMeasurementAngle"] | 0.0;
-      config.autoMeasurementEnabled = doc["autoMeasurementEnabled"] | false; // NEW
-
-      file.close();
-      logSerial("Configuration loaded from settings.json");
-
-      if (config.lastMeasurementTime > 0)
-      {
-        lastMeasurement = config.lastMeasurementValue;
-        currentAngle = config.lastMeasurementAngle;
-        lastMeasurementTime = DateTime(config.lastMeasurementTime);
-        logSerial("Last measurement restored: " + String(lastMeasurement, 3) +
-                  " (angle: " + String(config.lastMeasurementAngle, 1) + "°) at " +
-                  String(lastMeasurementTime.timestamp()));
-      }
-
-      // Log auto-measurement status
-      logSerial("Automatic measurements: " + String(config.autoMeasurementEnabled ? "ENABLED" : "DISABLED"));
-    }
-    else
-    {
-      logSerial("Failed to open settings.json, creating new one");
-      createDefaultConfig();
-    }
-  }
-  else
-  {
-    logSerial("settings.json not found, creating default configuration");
-    createDefaultConfig();
-  }
-}
-
-void createDefaultConfig()
-{
-  config.desiredDensity = 1.025;
-  config.measurementInterval = 30;
-  config.fillDuration = 5;
-  config.waitDuration = 5;
-  config.measurementDuration = 10;
-  config.emptyDuration = 5;
-  config.calibrationOffset = 0.0;
-  config.calibrationScale = 1.0;
-  config.lastMeasurementValue = 0.0;
-  config.lastMeasurementTime = 0;
-  config.targetAngleMin = 40.0;
-  config.targetAngleMax = 45.0;
-  config.lastMeasurementAngle = 0.0;
-  config.autoMeasurementEnabled = false; // NEW: Default to disabled
-
-  saveConfig();
-  logSerial("Default configuration created and saved");
-}
-
-void saveConfig()
-{
-  DynamicJsonDocument doc(1024);
-  doc["desiredDensity"] = config.desiredDensity;
-  doc["measurementInterval"] = config.measurementInterval;
-  doc["fillDuration"] = config.fillDuration;
-  doc["waitDuration"] = config.waitDuration;
-  doc["measurementDuration"] = config.measurementDuration;
-  doc["emptyDuration"] = config.emptyDuration;
-  doc["calibrationOffset"] = config.calibrationOffset;
-  doc["calibrationScale"] = config.calibrationScale;
-  doc["lastMeasurementValue"] = config.lastMeasurementValue;
-  doc["lastMeasurementTime"] = config.lastMeasurementTime;
-  doc["targetAngleMin"] = config.targetAngleMin;
-  doc["targetAngleMax"] = config.targetAngleMax;
-  doc["lastMeasurementAngle"] = config.lastMeasurementAngle;
-  doc["autoMeasurementEnabled"] = config.autoMeasurementEnabled; // NEW
-
-  File file = LittleFS.open("/settings.json", "w");
-  if (file)
-  {
-    serializeJson(doc, file);
-    file.close();
-    logSerial("Configuration saved to settings.json");
-  }
-  else
-  {
-    logSerial("Failed to save configuration to settings.json");
   }
 }
 
@@ -798,6 +870,12 @@ void setupWebServer()
   doc["lastMeasurementAngle"] = config.lastMeasurementAngle;
   doc["autoMeasurementEnabled"] = config.autoMeasurementEnabled; // NEW
   
+  // servo angles in api
+  doc["fillOpenAngle"] = config.fillOpenAngle;
+  doc["fillCloseAngle"] = config.fillCloseAngle;
+  doc["emptyOpenAngle"] = config.emptyOpenAngle;
+  doc["emptyCloseAngle"] = config.emptyCloseAngle;
+
   String response;
   serializeJson(doc, response);
   server.send(200, "application/json", response); });
@@ -839,6 +917,16 @@ void setupWebServer()
       if (doc.containsKey("autoMeasurementEnabled")) 
         config.autoMeasurementEnabled = doc["autoMeasurementEnabled"];
       
+      // update servo angles
+      if (doc.containsKey("fillOpenAngle")) 
+        config.fillOpenAngle = doc["fillOpenAngle"];
+      if (doc.containsKey("fillCloseAngle")) 
+        config.fillCloseAngle = doc["fillCloseAngle"];
+      if (doc.containsKey("emptyOpenAngle")) 
+        config.emptyOpenAngle = doc["emptyOpenAngle"];
+      if (doc.containsKey("emptyCloseAngle")) 
+        config.emptyCloseAngle = doc["emptyCloseAngle"];
+      
       // Save the updated configuration
       saveConfig();
       
@@ -868,14 +956,18 @@ void setupWebServer()
       String action = doc["action"];
       bool state = doc["state"];
       
-      if (action == "fill_solenoid") {
-        digitalWrite(FILL_SOLENOID_PIN, state ? LOW : HIGH);
-        logSerial("Fill solenoid " + String(state ? "activated" : "deactivated") + " via web interface");
-      } else if (action == "empty_solenoid") {
-        digitalWrite(EMPTY_SOLENOID_PIN, state ? LOW : HIGH);
-        logSerial("Empty solenoid " + String(state ? "activated" : "deactivated") + " via web interface");
+      if (action == "fill_servo") {
+        // Use servo.write() instead of digitalWrite
+        int angle = state ? config.fillOpenAngle : config.fillCloseAngle;
+        fillServo.write(angle);
+        logSerial("Fill servo " + String(state ? "opened" : "closed") + " (" + String(angle) + "°) via web interface");
+      } else if (action == "empty_servo") {
+        // Use servo.write() instead of digitalWrite
+        int angle = state ? config.emptyOpenAngle : config.emptyCloseAngle;
+        emptyServo.write(angle);
+        logSerial("Empty servo " + String(state ? "opened" : "closed") + " (" + String(angle) + "°) via web interface");
       } else if (action == "measuring_relay") {
-        digitalWrite(MEASURING_RELAY_PIN, state ? LOW : HIGH);
+        digitalWrite(MEASURING_RELAY_PIN, state ? HIGH : LOW);
         logSerial("Measuring relay " + String(state ? "activated" : "deactivated") + " via web interface");
       }
       
@@ -1025,8 +1117,8 @@ void performMeasurement()
     measurementCount = 0;
     lastAngleReadTime = 0;
 
-    // Ensure empty solenoid is closed
-    digitalWrite(EMPTY_SOLENOID_PIN, HIGH);
+    // close empty servo
+    emptyServo.write(config.emptyCloseAngle);
 
     logSerial("Starting measurement sequence...");
   }
@@ -1045,26 +1137,80 @@ void updateMeasurementState()
 
   switch (measurementState)
   {
-  case EMPTYING_INITIAL:
-    if (elapsedTime >= 1000)
-    { // 1 second delay
-      // Step 2: Fill chamber
-      digitalWrite(FILL_SOLENOID_PIN, LOW);
-      measurementState = FILLING;
-      stateStartTime = currentTime;
-      logSerial("Filling chamber...");
-    }
-    break;
+    // case EMPTYING_INITIAL:
+    //   if (elapsedTime >= 1000)
+    //   { // 1 second delay
+    //     // Step 2: Fill chamber
+    //     digitalWrite(SERVO_FILL_PIN, LOW);
+    //     measurementState = FILLING;
+    //     stateStartTime = currentTime;
+    //     logSerial("Filling chamber...");
+    //   }
+    //   break;
 
-  case FILLING:
-    if (elapsedTime >= (config.fillDuration * 1000))
-    {
-      digitalWrite(FILL_SOLENOID_PIN, HIGH);
-      measurementState = WAITING_TO_SETTLE;
-      stateStartTime = currentTime;
-      logSerial("Waiting for settling...");
-    }
-    break;
+    case EMPTYING_INITIAL:
+      if (elapsedTime >= 1000)
+      { // 1 second delay
+        // Step 2: Fill chamber - OPEN FILL SERVO
+        fillServo.write(config.fillOpenAngle);
+        measurementState = FILLING;
+        stateStartTime = currentTime;
+        logSerial("Filling chamber... (servo at " + String(config.fillOpenAngle) + "°)");
+      }
+      break;
+
+  // case EMPTYING_INITIAL:
+  //   if (elapsedTime == 0)
+  //   {
+  //     emptyServo.write(config.emptyOpenAngle);
+  //     logSerial("Initial emptying: servo EMPTY opened");
+  //   }
+
+  //   if (elapsedTime >= 1000)
+  //   {
+  //     emptyServo.write(config.emptyCloseAngle);
+  //     measurementState = FILLING;
+  //     stateStartTime = currentTime;
+  //     logSerial("Initial emptying done, servo EMPTY closed");
+  //   }
+  //   break;
+
+    // case FILLING:
+    //   if (elapsedTime >= (config.fillDuration * 1000))
+    //   {
+    //     digitalWrite(SERVO_FILL_PIN, HIGH);
+    //     measurementState = WAITING_TO_SETTLE;
+    //     stateStartTime = currentTime;
+    //     logSerial("Waiting for settling...");
+    //   }
+    //   break;
+
+    case FILLING:
+      if (elapsedTime >= (config.fillDuration * 1000))
+      {
+        // CLOSE FILL SERVO
+        fillServo.write(config.fillCloseAngle);
+        measurementState = WAITING_TO_SETTLE;
+        stateStartTime = currentTime;
+        logSerial("Waiting for settling... (servo at " + String(config.fillCloseAngle) + "°)");
+      }
+      break;
+
+  // case FILLING:
+  //   if (elapsedTime == 0)
+  //   {
+  //     fillServo.write(config.fillOpenAngle);
+  //     logSerial("Servo FILL opened");
+  //   }
+
+  //   if (elapsedTime >= config.fillDuration * 1000)
+  //   {
+  //     fillServo.write(config.fillCloseAngle);
+  //     measurementState = WAITING_TO_SETTLE;
+  //     stateStartTime = currentTime;
+  //     logSerial("Servo FILL closed, settling...");
+  //   }
+  //   break;
 
   case WAITING_TO_SETTLE:
     if (elapsedTime >= (config.waitDuration * 1000))
@@ -1133,32 +1279,69 @@ void updateMeasurementState()
         }
 
         // Move to emptying phase
-        digitalWrite(EMPTY_SOLENOID_PIN, LOW);
+        emptyServo.write(config.emptyOpenAngle);
         measurementState = EMPTYING_FINAL;
         stateStartTime = currentTime;
-        logSerial("Emptying chamber...");
+        logSerial("Emptying chamber... (servo at " + String(config.emptyOpenAngle) + "°)");
       }
     }
     break;
 
-  case EMPTYING_FINAL:
-    if (elapsedTime >= (config.emptyDuration * 1000))
-    {
-      digitalWrite(EMPTY_SOLENOID_PIN, HIGH);
+    // case EMPTYING_FINAL:
+    //   if (elapsedTime >= (config.emptyDuration * 1000))
+    //   {
+    //     digitalWrite(SERVO_EMPTY_PIN, HIGH);
 
-      // Calculate next measurement time based on current measurement
-      DateTime now = rtc.now();
-      // Convert minutes to seconds: config.measurementInterval * 60
-      nextMeasurementTime = DateTime((uint32_t)(now.unixtime() + (config.measurementInterval * 60)));
+    //     // Calculate next measurement time based on current measurement
+    //     DateTime now = rtc.now();
+    //     // Convert minutes to seconds: config.measurementInterval * 60
+    //     nextMeasurementTime = DateTime((uint32_t)(now.unixtime() + (config.measurementInterval * 60)));
 
-      // Reset state
-      measurementState = IDLE;
-      isMeasuring = false;
+    //     // Reset state
+    //     measurementState = IDLE;
+    //     isMeasuring = false;
 
-      logSerial("Measurement sequence complete");
-      logSerial("Next measurement scheduled for: " + String(nextMeasurementTime.timestamp()));
-    }
-    break;
+    //     logSerial("Measurement sequence complete");
+    //     logSerial("Next measurement scheduled for: " + String(nextMeasurementTime.timestamp()));
+    //   }
+    //   break;
+
+    case EMPTYING_FINAL:
+      if (elapsedTime >= (config.emptyDuration * 1000))
+      {
+        // CLOSE EMPTY SERVO
+        emptyServo.write(config.emptyCloseAngle);
+        logSerial("Empty servo closed (servo at " + String(config.emptyCloseAngle) + "°)");
+
+        // Calculate next measurement time based on current measurement
+        DateTime now = rtc.now();
+        // Convert minutes to seconds: config.measurementInterval * 60
+        nextMeasurementTime = DateTime((uint32_t)(now.unixtime() + (config.measurementInterval * 60)));
+
+        // Reset state
+        measurementState = IDLE;
+        isMeasuring = false;
+
+        logSerial("Measurement sequence complete");
+        logSerial("Next measurement scheduled for: " + String(nextMeasurementTime.timestamp()));
+      }
+      break;
+
+  // case EMPTYING_FINAL:
+  //   if (elapsedTime == 0)
+  //   {
+  //     emptyServo.write(config.emptyOpenAngle);
+  //     logSerial("Servo EMPTY opened");
+  //   }
+
+  //   if (elapsedTime >= config.emptyDuration * 1000)
+  //   {
+  //     emptyServo.write(config.emptyCloseAngle);
+  //     measurementState = IDLE;
+  //     isMeasuring = false;
+  //     logSerial("Servo EMPTY closed, system ready");
+  //   }
+  //   break;
   }
 }
 
