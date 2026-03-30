@@ -271,63 +271,6 @@
             font-size: 10px;
         }
 
-        /* added: servo angle display*/
-        .servo-info {
-            font-size: 8px;
-            color: #7f8c8d;
-            margin-left: 10px;
-        }
-
-        /* added: servo angle section styles*/
-        .servo-angle-section {
-            background: #fff8e1;
-            border: 1px solid #ffd54f;
-            border-radius: 4px;
-            padding: 8px;
-            margin-bottom: 8px;
-        }
-
-        .servo-controls {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-        }
-
-        .servo-group {
-            background: white;
-            padding: 6px;
-            border-radius: 3px;
-            border: 1px solid #ffe082;
-        }
-
-        .servo-group h4 {
-            font-size: 10px;
-            color: #f57c00;
-            margin-bottom: 4px;
-        }
-
-        .servo-inputs {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 4px;
-        }
-
-        .servo-inputs > div {
-            display: flex;
-            flex-direction: column;
-        }
-
-        .servo-inputs label {
-            font-size: 8px;
-            color: #666;
-            margin-bottom: 2px;
-        }
-
-        .servo-inputs input {
-            padding: 3px;
-            font-size: 10px;
-        }
-
         .toggle-switch {
             position: relative;
             display: inline-block;
@@ -700,49 +643,6 @@
                         <input type="number" id="emptyDuration" value="120">
                     </div>
                 </div>
-
-                <!-- ===== ADDED: SERVO ANGLE CONFIGURATION ===== -->
-                <div class="servo-angle-section">
-                    <h3>🔧 DS3225 Servo Angle Configuration</h3>
-                    <div class="help-text" style="margin-bottom: 6px;">
-                        Configure servo rotation angles for valve control (0° - 180°)
-                    </div>
-                    
-                    <div class="servo-controls">
-                        <div class="servo-group">
-                            <h4>Fill Servo</h4>
-                            <div class="servo-inputs">
-                                <div>
-                                    <label for="fillOpenAngle">Open (°)</label>
-                                    <input type="number" id="fillOpenAngle" min="0" max="180" value="90">
-                                </div>
-                                <div>
-                                    <label for="fillCloseAngle">Close (°)</label>
-                                    <input type="number" id="fillCloseAngle" min="0" max="180" value="0">
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="servo-group">
-                            <h4>Empty Servo</h4>
-                            <div class="servo-inputs">
-                                <div>
-                                    <label for="emptyOpenAngle">Open (°)</label>
-                                    <input type="number" id="emptyOpenAngle" min="0" max="180" value="90">
-                                </div>
-                                <div>
-                                    <label for="emptyCloseAngle">Close (°)</label>
-                                    <input type="number" id="emptyCloseAngle" min="0" max="180" value="0">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="help-text" style="margin-top: 4px;">
-                        Adjust these values if valves don't fully open/close. Test in Control tab.
-                    </div>
-                </div>
-                <!-- =========================================== -->
-
                 <button class="btn success" onclick="saveSettings()">Save Settings</button>
             </div>
         </div>
@@ -768,33 +668,27 @@
         </div>
 
         <!-- Manual Control Tab -->
-        <!-- ===== MODIFIED: SERVO CONTROL SECTION ===== -->
         <div id="tab-control" class="tab-content">
             <div class="card">
                 <h2>Manual Control</h2>
                 <div class="relay-control">
-                    <div>
-                        <span>Fill Servo</span>
-                        <span class="servo-info" id="fillServoInfo">Current: --°</span>
-                    </div>
+                    <span>Fill Solenoid</span>
                     <label class="toggle-switch">
-                        <input type="checkbox" id="fillServo" onchange="controlServo('fill_servo', this.checked)">
+                        <input type="checkbox" id="fillSolenoid" onchange="controlRelay('fill_solenoid', this.checked)">
                         <span class="slider"></span>
                     </label>
                 </div>
-                <div class="help-text">Controls fill valve (ON=Open, OFF=Close)</div>
+                <div class="help-text">Controls fill valve</div>
 
                 <div class="relay-control">
-                    <div>
-                        <span>Empty Servo</span>
-                        <span class="servo-info" id="emptyServoInfo">Current: --°</span>
-                    </div>
+                    <span>Empty Solenoid</span>
                     <label class="toggle-switch">
-                        <input type="checkbox" id="emptyServo" onchange="controlServo('empty_servo', this.checked)">
+                        <input type="checkbox" id="emptySolenoid"
+                            onchange="controlRelay('empty_solenoid', this.checked)">
                         <span class="slider"></span>
                     </label>
                 </div>
-                <div class="help-text">Controls empty valve (ON=Open, OFF=Close)</div>
+                <div class="help-text">Controls empty valve</div>
 
                 <div class="relay-control">
                     <span>Measuring Light (OFF=Red, ON=Green)</span>
@@ -807,7 +701,6 @@
                 <div class="help-text">Status indicator light</div>
             </div>
         </div>
-        <!-- ========================================== -->
 
         <!-- Date/Time Tab -->
         <div id="tab-datetime" class="tab-content">
@@ -866,15 +759,6 @@
         let serialInterval;
         let serialPaused = false;
         let lastSerialUpdate = 0;
-
-        // ===== ADDED: SERVO ANGLE STORAGE =====
-        let servoAngles = {
-            fillOpen: 90,
-            fillClose: 0,
-            emptyOpen: 90,
-            emptyClose: 0
-        };
-        // ======================================
 
         const tabOrder = ['status', 'serial', 'settings', 'calibration', 'control', 'datetime', 'data'];
         let currentTabIndex = 0;
@@ -1197,20 +1081,6 @@
                 document.getElementById('targetAngleMin').value = config.targetAngleMin || 40.0;
                 document.getElementById('targetAngleMax').value = config.targetAngleMax || 45.0;
 
-                // ===== LOAD SERVO ANGLES =====
-                servoAngles.fillOpen = config.fillOpenAngle || 90;
-                servoAngles.fillClose = config.fillCloseAngle || 0;
-                servoAngles.emptyOpen = config.emptyOpenAngle || 90;
-                servoAngles.emptyClose = config.emptyCloseAngle || 0;
-
-                document.getElementById('fillOpenAngle').value = servoAngles.fillOpen;
-                document.getElementById('fillCloseAngle').value = servoAngles.fillClose;
-                document.getElementById('emptyOpenAngle').value = servoAngles.emptyOpen;
-                document.getElementById('emptyCloseAngle').value = servoAngles.emptyClose;
-                
-                updateServoInfo();
-                // ============================
-
                 const autoEnabled = config.autoMeasurementEnabled || false;
                 document.getElementById('autoMeasurementToggle').checked = autoEnabled;
                 updateAutoMeasurementNotice(autoEnabled);
@@ -1236,13 +1106,7 @@
                 calibrationScale: parseFloat(document.getElementById('calibrationScale').value),
                 targetAngleMin: parseFloat(document.getElementById('targetAngleMin').value),
                 targetAngleMax: parseFloat(document.getElementById('targetAngleMax').value),
-                autoMeasurementEnabled: document.getElementById('autoMeasurementToggle').checked,
-                // ===== SAVE SERVO ANGLES =====
-                fillOpenAngle: parseInt(document.getElementById('fillOpenAngle').value),
-                fillCloseAngle: parseInt(document.getElementById('fillCloseAngle').value),
-                emptyOpenAngle: parseInt(document.getElementById('emptyOpenAngle').value),
-                emptyCloseAngle: parseInt(document.getElementById('emptyCloseAngle').value)
-                // ============================
+                autoMeasurementEnabled: document.getElementById('autoMeasurementToggle').checked
             };
 
             try {
@@ -1255,14 +1119,6 @@
                 });
 
                 if (response.ok) {
-                    // ===== UPDATE LOCAL SERVO ANGLES =====
-                    servoAngles.fillOpen = config.fillOpenAngle;
-                    servoAngles.fillClose = config.fillCloseAngle;
-                    servoAngles.emptyOpen = config.emptyOpenAngle;
-                    servoAngles.emptyClose = config.emptyCloseAngle;
-                    updateServoInfo();
-                    // =====================================
-                    
                     alert('Settings saved successfully!');
                     addSerialMessage('Settings updated: angle ' +
                         config.targetAngleMin + '°-' + config.targetAngleMax + '°');
@@ -1369,44 +1225,6 @@
             }
         }
 
-        // ===== ADDED: NEW SERVO CONTROL FUNCTION =====
-        async function controlServo(action, state) {
-            try {
-                const response = await fetch('/api/control', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        action: action,
-                        state: state
-                    })
-                });
-
-                if (response.ok) {
-                    let angle;
-                    let servoName;
-                    
-                    if (action === 'fill_servo') {
-                        angle = state ? servoAngles.fillOpen : servoAngles.fillClose;
-                        servoName = 'Fill';
-                        document.getElementById('fillServoInfo').textContent = `Current: ${angle}°`;
-                    } else if (action === 'empty_servo') {
-                        angle = state ? servoAngles.emptyOpen : servoAngles.emptyClose;
-                        servoName = 'Empty';
-                        document.getElementById('emptyServoInfo').textContent = `Current: ${angle}°`;
-                    }
-                    
-                    addSerialMessage(`${servoName} servo ${state ? 'opened' : 'closed'} (${angle}°)`);
-                } else {
-                    alert('Error controlling servo');
-                }
-            } catch (error) {
-                console.error('Error controlling servo:', error);
-                alert('Error controlling servo');
-            }
-        }
-
         async function controlRelay(action, state) {
             try {
                 const response = await fetch('/api/control', {
@@ -1430,13 +1248,6 @@
                 alert('Error controlling relay');
             }
         }
-
-        // ===== ADDED: UPDATE SERVO INFO DISPLAY =====
-        function updateServoInfo() {
-            document.getElementById('fillServoInfo').textContent = `(${servoAngles.fillClose}° / ${servoAngles.fillOpen}°)`;
-            document.getElementById('emptyServoInfo').textContent = `(${servoAngles.emptyClose}° / ${servoAngles.emptyOpen}°)`;
-        }
-        // ===========================================
 
         async function setDateTime() {
             const datetimeValue = document.getElementById('datetime').value;
