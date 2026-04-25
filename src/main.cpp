@@ -344,6 +344,9 @@ void setup()
     digitalWrite(EMPTY_SOLENOID_PIN, HIGH);
     digitalWrite(MEASURING_RELAY_PIN, HIGH); // LOW = Red light (NC), HIGH = Green light (NO)
 
+    // Setup WiFi hotspot
+    setupWiFiHotspot();
+
     // Initialize I2C buses with custom pins
     I2C_1.begin(SDA_PIN, SCL_PIN);   // Primary I2C bus
     I2C_2.begin(SDA2_PIN, SCL2_PIN); // Secondary I2C bus
@@ -355,9 +358,6 @@ void setup()
 
     // Now scan I2C devices after RTC is initialized
     scanI2CDevices();
-
-    // Setup WiFi hotspot
-    setupWiFiHotspot();
 
     // Setup web server
     setupWebServer();
