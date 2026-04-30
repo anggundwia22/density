@@ -1119,26 +1119,7 @@ void updateMeasurementState()
             if (measurementCount < config.measurementDuration)
             {
                 sensors_event_t a, g, temp;
-                // mpu.getEvent(&a, &g, &temp);
-
-                if (mpuOk)
-                {
-                    mpu.getEvent(&a, &g, &temp);
-
-                    // Validasi data
-                    if (isnan(a.acceleration.x) || isnan(a.acceleration.y) || isnan(a.acceleration.z))
-                    {
-                        logSerial("ERROR: Invalid MPU data detected (measurement)");
-                        return;
-                    }
-                }
-                else
-                {
-                    // fallback: jangan update data
-                    a.acceleration.x = 0;
-                    a.acceleration.y = 0;
-                    a.acceleration.z = 9.8;
-                }
+                mpu.getEvent(&a, &g, &temp);
 
                 // Calculate angle from accelerometer
                 float angle = atan2(a.acceleration.y, a.acceleration.z) * 180.0 / PI;
