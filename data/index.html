@@ -135,6 +135,43 @@
             margin-top: 4px;
         }
 
+        .auto-measurement-notice {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 4px;
+            padding: 6px;
+            margin-bottom: 8px;
+            font-size: 10px;
+            text-align: center;
+        }
+
+        .auto-measurement-notice.enabled {
+            background: #d4edda;
+            border-color: #28a745;
+        }
+
+        .auto-measurement-notice.disabled {
+            background: #f8d7da;
+            border-color: #dc3545;
+        }
+
+        .auto-measurement-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            border: 2px solid #dee2e6;
+        }
+
+        .auto-measurement-toggle label {
+            margin: 0;
+            font-size: 10px;
+            font-weight: bold;
+        }
+
         .form-group {
             margin-bottom: 8px;
         }
@@ -164,7 +201,10 @@
         }
 
         input[type="datetime-local"] {
-            padding: 4px;
+            padding: 8px;
+            height: 40px;
+            font-size: 12px;
+            cursor: pointer;
         }
 
         .angle-range-inputs {
@@ -394,8 +434,8 @@
 
         .fab-container {
             position: fixed;
-            bottom: 100px;
-            right: 180px;
+            bottom: 10px;
+            right: 10px;
             z-index: 1000;
             display: flex;
             gap: 12px;
@@ -440,27 +480,19 @@
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
         }
 
-        /* Mencegah teks atau elemen lain terseleksi saat disentuh */
         * {
             -webkit-user-select: none;
-            /* Chrome, Safari */
             -moz-user-select: none;
-            /* Firefox */
             -ms-user-select: none;
-            /* Internet Explorer */
             user-select: none;
-            /* Standar */
             -webkit-touch-callout: none;
-            /* Hilangkan popup select di iOS/Android browser */
         }
 
-        /* Agar sentuhan di tombol/slider tidak berubah jadi drag */
         .toggle-switch input,
         button,
         label,
         .slider {
             touch-action: manipulation;
-            /* Fokus ke sentuhan, bukan drag */
         }
     </style>
 </head>
@@ -486,6 +518,12 @@
         <div id="tab-status" class="tab-content active">
             <div class="card">
                 <h2>System Status</h2>
+                
+                <!-- Auto Measurement Notice -->
+                <div class="auto-measurement-notice disabled" id="autoMeasurementNotice">
+                    <span id="autoMeasurementStatus">⚠️ Auto measurements disabled</span>
+                </div>
+
                 <div class="status-grid">
                     <div class="status-item">
                         <div class="label">Current Angle</div>
@@ -513,7 +551,7 @@
                     </div>
                 </div>
                 <div class="help-text" style="margin-bottom: 5px; font-size: 8px;">
-                    Automatic measurements scheduled based on last measurement + interval.
+                    Auto measurements scheduled based on last + interval. Enable in Settings.
                 </div>
                 <div class="control-buttons">
                     <button class="btn success" onclick="startMeasurement()">Start Measurement</button>
@@ -528,7 +566,7 @@
                 <div class="serial-header">
                     <span>System Debug Output</span>
                     <div class="serial-stats">
-                        <span id="serialStats">Messages: 0/400</span>
+                        <span id="serialStats">Messages: 0/100</span>
                     </div>
                     <div>
                         <button class="btn btn-small" onclick="clearSerial()">Clear</button>
@@ -551,6 +589,19 @@
         <div id="tab-settings" class="tab-content">
             <div class="card">
                 <h2>Settings</h2>
+                
+                <!-- Auto Measurement Toggle -->
+                <div class="auto-measurement-toggle">
+                    <label for="autoMeasurementToggle">Enable Auto Measurements</label>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="autoMeasurementToggle" onchange="toggleAutoMeasurement(this.checked)">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="help-text" style="margin-bottom: 8px;">
+                    When enabled, measurements run at configured interval. When disabled, must start manually.
+                </div>
+
                 <div class="compact-grid">
                     <div class="form-group">
                         <label for="desiredDensity">Desired Density</label>
@@ -661,6 +712,7 @@
                     <div class="help-text">Set DS3231 RTC module time</div>
                 </div>
                 <div class="control-buttons">
+                    <button class="btn warning" onclick="adjustDateTime()">Adjust Datetime</button>
                     <button class="btn success" onclick="setDateTime()">Set Date & Time</button>
                     <button class="btn" onclick="setCurrentDateTime()">Use Current Time</button>
                 </div>
@@ -708,27 +760,21 @@
         let serialPaused = false;
         let lastSerialUpdate = 0;
 
-        // Tab order for navigation
         const tabOrder = ['status', 'serial', 'settings', 'calibration', 'control', 'datetime', 'data'];
         let currentTabIndex = 0;
 
-        // Tab navigation
         function showTab(tabName, clickedElement) {
-            // Hide all tabs
             const tabs = document.querySelectorAll('.tab-content');
             tabs.forEach(tab => tab.classList.remove('active'));
 
             const tabButtons = document.querySelectorAll('.tab');
             tabButtons.forEach(btn => btn.classList.remove('active'));
 
-            // Show selected tab
             document.getElementById('tab-' + tabName).classList.add('active');
 
-            // Update tab button
             if (clickedElement) {
                 clickedElement.classList.add('active');
             } else {
-                // Find and activate corresponding tab button
                 tabButtons.forEach(btn => {
                     const onclick = btn.getAttribute('onclick') || '';
                     if (onclick.includes("'" + tabName + "'") || onclick.includes('"' + tabName + '"')) {
@@ -737,44 +783,46 @@
                 });
             }
 
-            // Update current tab index
             currentTabIndex = tabOrder.indexOf(tabName);
             if (currentTabIndex === -1) currentTabIndex = 0;
 
-            // Update FAB buttons state
             updateFABButtons();
         }
 
-        // Navigate to previous/next tab
+        // Adjust datetime - opens the datetime picker
+        function adjustDateTime() {
+            const datetimeInput = document.getElementById('datetime');
+            datetimeInput.focus();
+            datetimeInput.click();
+            // For some browsers, triggering showPicker() works better
+            if (datetimeInput.showPicker) {
+                try {
+                    datetimeInput.showPicker();
+                } catch (e) {
+                    // Fallback if showPicker is not supported
+                    console.log('showPicker not supported, using focus/click');
+                }
+            }
+        }
+
         function navigateTab(direction) {
             currentTabIndex += direction;
 
-            // Wrap around
             if (currentTabIndex < 0) {
                 currentTabIndex = tabOrder.length - 1;
             } else if (currentTabIndex >= tabOrder.length) {
                 currentTabIndex = 0;
             }
 
-            // Show the tab
             const tabName = tabOrder[currentTabIndex];
             showTab(tabName);
         }
 
-        // Update FAB buttons disabled state
         function updateFABButtons() {
-            const fabPrev = document.getElementById('fabPrev');
-            const fabNext = document.getElementById('fabNext');
-
-            // Enable/disable based on position (optional - can remove if you want wrap around)
-            // For now, we'll keep them enabled for wrap around navigation
-            // fabPrev.disabled = currentTabIndex === 0;
-            // fabNext.disabled = currentTabIndex === tabOrder.length - 1;
+            // Keep enabled for wrap-around navigation
         }
 
-        // Initialize the page
         document.addEventListener('DOMContentLoaded', function () {
-            // Initialize current tab index
             currentTabIndex = tabOrder.indexOf('status');
             updateFABButtons();
 
@@ -782,55 +830,68 @@
             refreshStatus();
             refreshFileList();
 
-            // Auto-refresh status every 5 seconds
             statusInterval = setInterval(refreshStatus, 5000);
-
-            // Update current time every second
             timeInterval = setInterval(updateCurrentTime, 1000);
             updateCurrentTime();
 
-            // Start real serial monitoring
             startSerialMonitoring();
-
-            // Set current datetime in picker
             setCurrentDateTime();
         });
 
-        // Update current time display
         function updateCurrentTime() {
             const now = new Date();
             const timeString = now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
             document.getElementById('currentTime').textContent = timeString;
         }
 
-        // Real serial monitoring functions
+        async function toggleAutoMeasurement(enabled) {
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        autoMeasurementEnabled: enabled
+                    })
+                });
+
+                if (response.ok) {
+                    updateAutoMeasurementNotice(enabled);
+                    addSerialMessage('Auto measurements ' + (enabled ? 'ENABLED' : 'DISABLED'));
+                    refreshStatus();
+                } else {
+                    alert('Error updating auto-measurement');
+                    document.getElementById('autoMeasurementToggle').checked = !enabled;
+                }
+            } catch (error) {
+                console.error('Error toggling auto-measurement:', error);
+                alert('Error updating auto-measurement');
+                document.getElementById('autoMeasurementToggle').checked = !enabled;
+            }
+        }
+
+        function updateAutoMeasurementNotice(enabled) {
+            const notice = document.getElementById('autoMeasurementNotice');
+            const status = document.getElementById('autoMeasurementStatus');
+            
+            if (enabled) {
+                notice.className = 'auto-measurement-notice enabled';
+                status.textContent = '✓ Auto measurements enabled';
+            } else {
+                notice.className = 'auto-measurement-notice disabled';
+                status.textContent = '⚠️ Auto measurements disabled';
+            }
+        }
+
         function startSerialMonitoring() {
-            // Start monitoring real serial output from ESP32
             serialInterval = setInterval(() => {
                 if (!serialPaused) {
                     refreshSerial();
                 }
-            }, 2000); // Check every 2 seconds
+            }, 2000);
         }
 
-        function updateSerialMonitor() {
-            fetch('/api/serial')
-                .then(response => response.json())
-                .then(data => {
-                    const output = document.getElementById('serialOutput');
-                    output.textContent = data.output;
-                    output.scrollTop = output.scrollHeight;
-
-                    // Update stats
-                    const stats = document.getElementById('serialStats');
-                    stats.textContent = `Messages: ${data.totalMessages}/${data.bufferSize}`;
-                })
-                .catch(error => {
-                    console.error('Error fetching serial data:', error);
-                });
-        }
-
-        // Update the existing refreshSerial function to use the new endpoint
         async function refreshSerial() {
             try {
                 const response = await fetch('/api/serial');
@@ -841,46 +902,26 @@
                     output.textContent = data.output;
                     output.scrollTop = output.scrollHeight;
 
-                    // Update stats
                     const stats = document.getElementById('serialStats');
-                    stats.textContent = `Messages: ${data.totalMessages || 0}/${data.bufferSize || 400}`;
+                    stats.textContent = `Messages: ${data.totalMessages || 0}/${data.bufferSize || 100}`;
                 }
             } catch (error) {
                 console.error('Error fetching serial data:', error);
             }
         }
 
-        // Fallback simulation for development
-        function simulateSerialData() {
-            const messages = [
-                'MPU6050 reading: Angle = 42.5°',
-                'Measurement cycle started',
-                'Fill solenoid activated',
-                'Waiting for liquid to settle...',
-                'Taking measurements...',
-                'Angle calculated: 43.2°',
-                'Empty solenoid activated',
-                'Measurement complete'
-            ];
-
-            const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-            const timestamp = new Date().toLocaleTimeString();
-            addSerialMessage(`[${timestamp}] ${randomMessage}`);
-        }
-
         function addSerialMessage(message) {
             const output = document.getElementById('serialOutput');
-            output.textContent += message + '\n';
+            const timestamp = new Date().toLocaleTimeString();
+            output.textContent += `[${timestamp}] ${message}\n`;
             output.scrollTop = output.scrollHeight;
 
-            // Limit output to last 1000 lines
             const lines = output.textContent.split('\n');
             if (lines.length > 1000) {
                 output.textContent = lines.slice(-1000).join('\n');
             }
         }
 
-        // Enhanced clear function
         async function clearSerial() {
             try {
                 const response = await fetch('/api/serial/clear', {
@@ -889,7 +930,7 @@
 
                 if (response.ok) {
                     document.getElementById('serialOutput').textContent = '';
-                    document.getElementById('serialStats').textContent = 'Messages: 0/400';
+                    document.getElementById('serialStats').textContent = 'Messages: 0/100';
                 } else {
                     console.error('Failed to clear serial buffer');
                 }
@@ -916,8 +957,6 @@
             const command = input.value.trim();
             if (command) {
                 addSerialMessage(`> ${command}`);
-                // Here you would send the command to the ESP32
-                // For simulation, we'll just echo back
                 setTimeout(() => {
                     addSerialMessage(`Command "${command}" sent to device`);
                 }, 100);
@@ -925,40 +964,13 @@
             }
         }
 
-        // FIXED: Timezone handling functions
-        // Get timezone offset in seconds (ESP32 stores in UTC, convert to local time)
-        function getTimezoneOffsetSeconds() {
-            const now = new Date();
-            return now.getTimezoneOffset() * -60; // Convert minutes to seconds, invert sign
-        }
-
-        // FIXED: Updated formatDateTime function with timezone correction
-        function formatDateTime(timestamp) {
-            if (!timestamp || timestamp === 0) return '--';
-
-            // ESP32 stores in UTC, but we want to display in local timezone
-            const utcDate = new Date(timestamp * 1000);
-
-            // Convert to local timezone string
-            return utcDate.toLocaleDateString() + ' ' + utcDate.toLocaleTimeString();
-        }
-
-        // Alternative function for more precise timezone handling
         function formatDateTimeWithOffset(timestamp) {
             if (!timestamp || timestamp === 0) return '--';
-
-            // Create date from UTC timestamp
             const utcDate = new Date(timestamp * 1000);
-
-            // Subtract 8 hours (in ms)
             utcDate.setHours(utcDate.getHours() - 7);
-
-            // Convert to local timezone string
             return utcDate.toLocaleDateString() + ' ' + utcDate.toLocaleTimeString();
         }
 
-
-        // File management functions
         async function refreshFileList() {
             try {
                 const response = await fetch('/api/files');
@@ -1011,7 +1023,6 @@
             return date.toLocaleDateString();
         }
 
-        // FIXED: Download file function
         async function downloadFile(filename) {
             try {
                 const response = await fetch(`/api/file?name=${encodeURIComponent(filename)}`);
@@ -1054,7 +1065,6 @@
             }
         }
 
-        // Load settings from device
         async function loadSettings() {
             try {
                 const response = await fetch('/api/config');
@@ -1068,23 +1078,22 @@
                 document.getElementById('emptyDuration').value = config.emptyDuration;
                 document.getElementById('calibrationOffset').value = config.calibrationOffset;
                 document.getElementById('calibrationScale').value = config.calibrationScale;
-
-                // Load angle range settings
                 document.getElementById('targetAngleMin').value = config.targetAngleMin || 40.0;
                 document.getElementById('targetAngleMax').value = config.targetAngleMax || 45.0;
 
-                // Show last measurement info if available
+                const autoEnabled = config.autoMeasurementEnabled || false;
+                document.getElementById('autoMeasurementToggle').checked = autoEnabled;
+                updateAutoMeasurementNotice(autoEnabled);
+
                 if (config.lastMeasurementTime > 0) {
                     addSerialMessage('Last measurement loaded: ' + config.lastMeasurementValue.toFixed(3) +
-                        ' (angle: ' + (config.lastMeasurementAngle || 0).toFixed(1) + '°) at ' +
-                        formatDateTime(config.lastMeasurementTime));
+                        ' (angle: ' + (config.lastMeasurementAngle || 0).toFixed(1) + '°)');
                 }
             } catch (error) {
                 console.error('Error loading settings:', error);
             }
         }
 
-        // Save settings to device
         async function saveSettings() {
             const config = {
                 desiredDensity: parseFloat(document.getElementById('desiredDensity').value),
@@ -1095,9 +1104,9 @@
                 emptyDuration: parseInt(document.getElementById('emptyDuration').value),
                 calibrationOffset: parseFloat(document.getElementById('calibrationOffset').value),
                 calibrationScale: parseFloat(document.getElementById('calibrationScale').value),
-                // Include angle range settings
                 targetAngleMin: parseFloat(document.getElementById('targetAngleMin').value),
-                targetAngleMax: parseFloat(document.getElementById('targetAngleMax').value)
+                targetAngleMax: parseFloat(document.getElementById('targetAngleMax').value),
+                autoMeasurementEnabled: document.getElementById('autoMeasurementToggle').checked
             };
 
             try {
@@ -1111,8 +1120,8 @@
 
                 if (response.ok) {
                     alert('Settings saved successfully!');
-                    addSerialMessage('Settings updated including angle range: ' +
-                        config.targetAngleMin + '° - ' + config.targetAngleMax + '°');
+                    addSerialMessage('Settings updated: angle ' +
+                        config.targetAngleMin + '°-' + config.targetAngleMax + '°');
                 } else {
                     alert('Error saving settings');
                 }
@@ -1122,7 +1131,6 @@
             }
         }
 
-        // Save calibration settings
         async function saveCalibration() {
             const config = {
                 calibrationOffset: parseFloat(document.getElementById('calibrationOffset').value),
@@ -1150,7 +1158,6 @@
             }
         }
 
-        // FIXED: Refresh system status with timezone handling
         async function refreshStatus() {
             try {
                 const response = await fetch('/api/status');
@@ -1160,21 +1167,23 @@
                 document.getElementById('currentDensity').textContent = status.currentDensity.toFixed(3);
                 document.getElementById('lastMeasurement').textContent = status.lastMeasurement.toFixed(3);
 
-                // Display last measurement angle
                 if (status.lastMeasurementAngle !== undefined && status.lastMeasurementAngle > 0) {
                     document.getElementById('lastAngle').textContent = status.lastMeasurementAngle.toFixed(1) + '°';
                 } else {
                     document.getElementById('lastAngle').textContent = '--°';
                 }
 
-                // Handle next measurement display with timezone correction
+                if (status.autoMeasurementEnabled !== undefined) {
+                    document.getElementById('autoMeasurementToggle').checked = status.autoMeasurementEnabled;
+                    updateAutoMeasurementNotice(status.autoMeasurementEnabled);
+                }
+
                 if (status.hasScheduledMeasurement && status.nextMeasurementTime > 0) {
                     document.getElementById('nextMeasurement').textContent = formatDateTimeWithOffset(status.nextMeasurementTime);
                 } else {
                     document.getElementById('nextMeasurement').textContent = 'No scheduled';
                 }
 
-                // Handle last measurement time with timezone correction
                 if (status.lastMeasurementTime > 0) {
                     document.getElementById('lastMeasurementTime').textContent = formatDateTimeWithOffset(status.lastMeasurementTime);
                 } else {
@@ -1196,7 +1205,6 @@
             }
         }
 
-        // Start manual measurement
         async function startMeasurement() {
             try {
                 const response = await fetch('/api/measure', {
@@ -1217,7 +1225,6 @@
             }
         }
 
-        // Control relay
         async function controlRelay(action, state) {
             try {
                 const response = await fetch('/api/control', {
@@ -1242,7 +1249,6 @@
             }
         }
 
-        // FIXED: Set date and time with proper timezone handling
         async function setDateTime() {
             const datetimeValue = document.getElementById('datetime').value;
             if (!datetimeValue) {
@@ -1250,11 +1256,8 @@
                 return;
             }
 
-            // Create local date from input
             const localDate = new Date(datetimeValue);
 
-            // ESP32 expects UTC time, so send the local time as-is since
-            // the ESP32 doesn't handle timezone conversions
             const dateTime = {
                 year: localDate.getFullYear(),
                 month: localDate.getMonth() + 1,
@@ -1275,7 +1278,7 @@
 
                 if (response.ok) {
                     alert('Date and time set successfully!');
-                    addSerialMessage(`RTC time set to: ${localDate.toLocaleString()} (local time)`);
+                    addSerialMessage(`RTC time set to: ${localDate.toLocaleString()} (local)`);
                     refreshStatus();
                 } else {
                     alert('Error setting date and time');
@@ -1286,7 +1289,6 @@
             }
         }
 
-        // Download all measurement data
         async function downloadAllData() {
             try {
                 const response = await fetch('/api/data');
@@ -1302,24 +1304,23 @@
                 window.URL.revokeObjectURL(url);
                 document.body.removeChild(a);
 
-                addSerialMessage('All measurement data downloaded');
+                addSerialMessage('All data downloaded');
             } catch (error) {
                 console.error('Error downloading data:', error);
                 alert('Error downloading data');
             }
         }
 
-        // Delete all measurement data
         async function deleteAllData() {
-            if (confirm('Are you sure you want to delete all measurement data? This cannot be undone.')) {
+            if (confirm('Delete all measurement data? This cannot be undone.')) {
                 try {
                     const response = await fetch('/api/data', {
                         method: 'DELETE'
                     });
 
                     if (response.ok) {
-                        alert('All measurement data deleted successfully!');
-                        addSerialMessage('All measurement data deleted');
+                        alert('All data deleted successfully!');
+                        addSerialMessage('All data deleted');
                         refreshFileList();
                     } else {
                         alert('Error deleting data');
@@ -1331,7 +1332,6 @@
             }
         }
 
-        // Set current date and time in form
         function setCurrentDateTime() {
             const now = new Date();
             const year = now.getFullYear();
@@ -1344,7 +1344,6 @@
             document.getElementById('datetime').value = datetimeString;
         }
 
-        // Cleanup intervals when page unloads
         window.addEventListener('beforeunload', function () {
             if (statusInterval) clearInterval(statusInterval);
             if (timeInterval) clearInterval(timeInterval);
