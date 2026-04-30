@@ -33,7 +33,7 @@
 #define OLED2_ADDRESS 0x3D
 
 // Serial logging buffer configuration
-#define SERIAL_BUFFER_SIZE 100 // Reduced buffer size
+#define SERIAL_BUFFER_SIZE 300 // Reduced buffer size
 
 // Optimized circular buffer for serial messages
 struct LogMessage
