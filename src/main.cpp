@@ -111,6 +111,8 @@ const unsigned long debounceDelay = 50;
 unsigned long lastDisplayUpdate = 0;
 int displayPage = 0; // 0 or 1 for alternating pages
 
+bool mpuOk = false;
+
 // Function prototypes
 void initializeSystem();
 void loadConfig();
@@ -344,9 +346,6 @@ void setup()
     digitalWrite(EMPTY_SOLENOID_PIN, HIGH);
     digitalWrite(MEASURING_RELAY_PIN, HIGH); // LOW = Red light (NC), HIGH = Green light (NO)
 
-    // Setup WiFi hotspot
-    setupWiFiHotspot();
-
     // Initialize I2C buses with custom pins
     I2C_1.begin(SDA_PIN, SCL_PIN);   // Primary I2C bus
     I2C_2.begin(SDA2_PIN, SCL2_PIN); // Secondary I2C bus
@@ -358,6 +357,9 @@ void setup()
 
     // Now scan I2C devices after RTC is initialized
     scanI2CDevices();
+
+    // Setup WiFi hotspot
+    setupWiFiHotspot();
 
     // Setup web server
     setupWebServer();
@@ -388,7 +390,16 @@ void loop()
     if (measurementState == IDLE || measurementState == MEASURING)
     {
         sensors_event_t a, g, temp;
+        // mpu.getEvent(&a, &g, &temp);
+
         mpu.getEvent(&a, &g, &temp);
+
+        // Validasi data
+        if (isnan(a.acceleration.x) || isnan(a.acceleration.y) || isnan(a.acceleration.z))
+        {
+            logSerial("ERROR: Invalid MPU data detected (loop)");
+            return; // skip loop ini
+        }
 
         // Calculate angle from accelerometer
         float rawAngle = atan2(a.acceleration.y, a.acceleration.z) * 180.0 / PI;
@@ -454,15 +465,27 @@ void initializeSystem()
     }
 
     // Initialize MPU6050 on I2C Bus 1
-    if (!mpu.begin(MPU6050_ADDRESS, &I2C_1))
+    // if (!mpu.begin(MPU6050_ADDRESS, &I2C_1))
+    // {
+    //     logSerial("Failed to find MPU6050 chip on I2C Bus 1");
+    //     while (1)
+    //     {
+    //         delay(10);
+    //     }
+    // }
+    // logSerial("MPU6050 initialized successfully on I2C Bus 1");
+
+    mpuOk = mpu.begin(MPU6050_ADDRESS, &I2C_1);
+
+    if (!mpuOk)
     {
-        logSerial("Failed to find MPU6050 chip on I2C Bus 1");
-        while (1)
-        {
-            delay(10);
-        }
+        logSerial("WARNING: MPU6050 not detected properly, but continuing...");
+        logSerial("Using MPU6050 in fallback mode (possible clone sensor)");
     }
-    logSerial("MPU6050 initialized successfully on I2C Bus 1");
+    else
+    {
+        logSerial("MPU6050 initialized successfully on I2C Bus 1");
+    }
 
     // Configure MPU6050
     mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
@@ -1096,7 +1119,26 @@ void updateMeasurementState()
             if (measurementCount < config.measurementDuration)
             {
                 sensors_event_t a, g, temp;
-                mpu.getEvent(&a, &g, &temp);
+                // mpu.getEvent(&a, &g, &temp);
+
+                if (mpuOk)
+                {
+                    mpu.getEvent(&a, &g, &temp);
+
+                    // Validasi data
+                    if (isnan(a.acceleration.x) || isnan(a.acceleration.y) || isnan(a.acceleration.z))
+                    {
+                        logSerial("ERROR: Invalid MPU data detected (measurement)");
+                        return;
+                    }
+                }
+                else
+                {
+                    // fallback: jangan update data
+                    a.acceleration.x = 0;
+                    a.acceleration.y = 0;
+                    a.acceleration.z = 9.8;
+                }
 
                 // Calculate angle from accelerometer
                 float angle = atan2(a.acceleration.y, a.acceleration.z) * 180.0 / PI;
